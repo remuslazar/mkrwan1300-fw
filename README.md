@@ -55,6 +55,8 @@ The upstream remote is `upstream`; `git fetch upstream` shows if it ever moves.
 
 ## Build
 
+Step by step, for building and flashing alike: [docs/flashing.md](docs/flashing.md).
+
 ```sh
 ./build.sh
 ```
