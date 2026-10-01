@@ -1494,32 +1494,49 @@ ATEerror_t at_Send(const char *param)
   }
 }
 
+/* AT+RECV/AT+RECVB output retries while the trace queue is full and drains
+ * before the OK, so a large payload is neither truncated nor loses the OK */
+
 ATEerror_t at_ReceiveBinary(const char *param)
 {
   unsigned i;
 
-  AT_PRINTF("%d:", ReceivedDataPort);
+  RX_PRINTF(true, "%d:", ReceivedDataPort);
   for (i = 0; i < ReceivedDataSize; i++)
   {
-    AT_PRINTF("%02x", ReceivedData[i]);
+    RX_PRINTF(true, "%02x", ReceivedData[i]);
     ReceivedData[i] = 0;
   }
-  AT_PRINTF("\r\n");
+  RX_PRINTF(true, "\r\n");
   ReceivedDataSize = 0;
+  TraceWaitIdle();
 
   return AT_OK;
 }
 
 ATEerror_t at_Receive(const char *param)
 {
-  AT_PRINTF("%d:", ReceivedDataPort);
+  unsigned len = 0;
+  unsigned i;
+
+  RX_PRINTF(true, "%d:", ReceivedDataPort);
   if (ReceivedDataSize)
   {
-    AT_PRINTF("%s", ReceivedData);
+    /* text up to the first NUL, as "%s" printed it, in chunks: a single
+     * element of up to 255 bytes plus header would not fit the queue */
+    while ((len < ReceivedDataSize) && (ReceivedData[len] != '\0'))
+    {
+      len++;
+    }
+    for (i = 0; i < len; i += 64)
+    {
+      RX_PRINTF(true, "%.*s", (int)((len - i < 64) ? (len - i) : 64), &ReceivedData[i]);
+    }
     memset1((uint8_t *)ReceivedData, 0, ReceivedDataSize);
     ReceivedDataSize = 0;
   }
-  AT_PRINTF("\r\n");
+  RX_PRINTF(true, "\r\n");
+  TraceWaitIdle();
 
   return AT_OK;
 }

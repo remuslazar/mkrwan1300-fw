@@ -104,9 +104,10 @@ data themselves.
 The held lines are written completely, waiting for room in the module's
 256-byte output queue, and the queue drains before the command runs, so its
 reply is never lost behind them. At 9600 baud a 115-byte downlink (the most
-TTN sends in RX2) takes about 0.3 s. With `AT+DLHOLD=0` output works as in
-stock firmware, which drops what does not fit: downlinks beyond about 50 bytes
-arrive truncated there.
+TTN sends in RX2) takes about 0.3 s. `AT+RECV` and `AT+RECVB` write their output
+the same way, in either mode. With `AT+DLHOLD=0` the asynchronous `+EVT` works
+as in stock firmware, which drops what does not fit: downlinks beyond about 50
+bytes arrive truncated there.
 
 | Command | Effect |
 | --- | --- |
