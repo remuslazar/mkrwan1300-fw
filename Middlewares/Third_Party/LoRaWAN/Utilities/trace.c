@@ -94,6 +94,14 @@ int32_t TraceSend( const char *strFormat, ...)
   return status;
 }
 
+void TraceWaitIdle( void )
+{
+  /* the UART DMA completion interrupt keeps draining the queue meanwhile */
+  while (TracePeripheralReady != SET)
+  {
+  }
+}
+
 const char *TraceGetFileName(const char *fullpath)
 {
   const char *ret = fullpath;

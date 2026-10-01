@@ -29,6 +29,7 @@
 #include "vcom.h"
 #include "tiny_sscanf.h"
 #include "version.h"
+#include "hw.h"
 #include "hw_msp.h"
 #include "test_rf.h"
 
@@ -262,13 +263,43 @@ static void print_d(int value);
  */
 static void print_u(unsigned int value);
 
+/**
+ * @brief  Print the +EVT notification for the last received data
+ * @param  false: queue each piece once and drop what does not fit, as stock
+ *         firmware does; true: wait for room in the 256-byte trace queue, so
+ *         a large downlink goes out complete
+ * @retval None
+ */
+static void print_rx_event(bool wait);
+
+/**
+ * @brief  Tell whether a command line prints the received data itself
+ * @param  The command line
+ * @retval true for AT+RECV, AT+RECV=?, AT+RECVB and AT+RECVB=?
+ */
+static bool is_receive_cmd(const char *cmd);
+
+/**
+ * @brief  Drive the host IRQ line (PA4 -> SAMD21 LORA_IRQ)
+ * @param  1 while a held downlink waits for the host, 0 otherwise
+ * @retval None
+ */
+static void host_irq_write(uint32_t level);
+
+/**
+ * @brief Downlink hold mode (AT+DLHOLD): 1 = keep +EVT until the next command
+ */
+static uint8_t DlHoldEnabled = 0;
+
+/**
+ * @brief A held downlink waits to be printed
+ */
+static uint8_t DlHoldPending = 0;
+
 /* Exported functions ------------------------------------------------------- */
 
 void set_at_receive(uint8_t AppPort, uint8_t *Buff, uint8_t BuffSize)
 {
-  unsigned i;
-  MibRequestConfirm_t mib;
-
   if (MAX_RECEIVED_DATA <= BuffSize)
   {
     BuffSize = MAX_RECEIVED_DATA;
@@ -277,6 +308,103 @@ void set_at_receive(uint8_t AppPort, uint8_t *Buff, uint8_t BuffSize)
   ReceivedDataSize = BuffSize;
   ReceivedDataPort = AppPort;
 
+  if (DlHoldEnabled)
+  {
+    /* The host may be asleep and would lose an asynchronous +EVT: keep it
+     * and raise the IRQ line instead; at_dlhold_flush() prints it in front
+     * of the host's next command. A newer downlink replaces an older one. */
+    DlHoldPending = 1;
+    host_irq_write(1);
+    return;
+  }
+
+  print_rx_event(false);
+}
+
+void at_dlhold_flush(const char *cmd)
+{
+  if (!DlHoldPending)
+  {
+    return;
+  }
+  DlHoldPending = 0;
+  host_irq_write(0);
+
+  if (!is_receive_cmd(cmd))
+  {
+    /* Each payload byte is its own queue element (2 bytes + 2 of header), so
+     * a downlink beyond ~50 bytes overruns the trace queue at 9600 baud; wait
+     * for room, then for the queue to drain, so that neither the event nor
+     * the command's own reply right after it is dropped. */
+    print_rx_event(true);
+    TraceWaitIdle();
+  }
+}
+
+ATEerror_t at_DlHold_get(const char *param)
+{
+  print_d(DlHoldEnabled);
+  return AT_OK;
+}
+
+ATEerror_t at_DlHold_set(const char *param)
+{
+  GPIO_InitTypeDef initStruct = {0};
+
+  switch (param[0])
+  {
+    case '0':
+    case '1':
+      DlHoldEnabled = param[0] - '0';
+      break;
+    default:
+      return AT_PARAM_ERROR;
+  }
+
+  /* Output only while the mode is on; otherwise analog, as in stock firmware */
+  DlHoldPending = 0;
+  host_irq_write(0);
+  initStruct.Mode = DlHoldEnabled ? GPIO_MODE_OUTPUT_PP : GPIO_MODE_ANALOG;
+  initStruct.Pull = GPIO_NOPULL;
+  initStruct.Speed = GPIO_SPEED_LOW;
+  HW_GPIO_Init(HOST_IRQ_PORT, HOST_IRQ_PIN, &initStruct);
+
+  return AT_OK;
+}
+
+static void host_irq_write(uint32_t level)
+{
+  /* HW_GpioInit() leaves the port clocks off; BSRR writes need it on */
+  RCC_GPIO_CLK_ENABLE((uint32_t) HOST_IRQ_PORT);
+  HW_GPIO_Write(HOST_IRQ_PORT, HOST_IRQ_PIN, level);
+}
+
+static bool is_receive_cmd(const char *cmd)
+{
+  static const char *const forms[] =
+  {
+    "AT"AT_RECV, "AT"AT_RECV"=?", "AT"AT_RECVB, "AT"AT_RECVB"=?"
+  };
+  unsigned i;
+
+  for (i = 0; i < sizeof(forms) / sizeof(forms[0]); i++)
+  {
+    if (strcmp(cmd, forms[i]) == 0)
+    {
+      return true;
+    }
+  }
+  return false;
+}
+
+/* AT_PRINTF, retried while the trace queue is full if wait is set */
+#define RX_PRINTF(wait, ...) do { } while ((TraceSend(__VA_ARGS__) != 0) && (wait))
+
+static void print_rx_event(bool wait)
+{
+  unsigned i;
+  MibRequestConfirm_t mib;
+
   mib.Type = MIB_DEVICE_CLASS;
   LoRaMacMibGetRequestConfirm(&mib);
 
@@ -284,29 +412,29 @@ void set_at_receive(uint8_t AppPort, uint8_t *Buff, uint8_t BuffSize)
   if (mib.Param.Class == CLASS_A)
   {
     /*aynchronous notification to the host*/
-    AT_PRINTF("+EVT:%d:", ReceivedDataPort);
+    RX_PRINTF(wait, "+EVT:%d:", ReceivedDataPort);
   }
   else /*We are either in Class C or in Class B*/
   {
 #ifdef LORAMAC_CLASSB_ENABLED
     if (Ctx.MulticastSlotState != PINGSLOT_STATE_RX) /*unicast mode*/
     {
-      AT_PRINTF("+EVT: UNICAST\r\n");
+      RX_PRINTF(wait, "+EVT: UNICAST\r\n");
     }
     else /*(multicast mode*/
     {
-      AT_PRINTF("+EVT: MULTICAST\r\n");
+      RX_PRINTF(wait, "+EVT: MULTICAST\r\n");
     }
 #endif /* LORAMAC_CLASSB_ENABLED */
-    AT_PRINTF("+EVT:%d:", ReceivedDataPort);
+    RX_PRINTF(wait, "+EVT:%d:", ReceivedDataPort);
   }
 
   /* Received data to be copied*/
   for (i = 0; i < ReceivedDataSize; i++)
   {
-    AT_PRINTF("%02x", ReceivedData[i]);
+    RX_PRINTF(wait, "%02x", ReceivedData[i]);
   }
-  AT_PRINTF("\r\n");
+  RX_PRINTF(wait, "\r\n");
 
   /* the ReceivedDataSize variable is not reset. Allow to still have access to the received*/
   /* data by the way of either AT+RECVB or AT+RECV ---- ReceivedDataSize = 0;*/
@@ -315,11 +443,11 @@ void set_at_receive(uint8_t AppPort, uint8_t *Buff, uint8_t BuffSize)
   /*to indicate in which received window we are : either RXC for Class_C or RX3 for Class_B*/
   if (mib.Param.Class == CLASS_C)
   {
-    AT_PRINTF("+EVT:RXC, RSSI %d, SNR %d\r\n", lora_config_rssi_get(), lora_config_snr_get());
+    RX_PRINTF(wait, "+EVT:RXC, RSSI %d, SNR %d\r\n", lora_config_rssi_get(), lora_config_snr_get());
   }
   else
   {
-    AT_PRINTF("+EVT:RX3, RSSI %d, SNR %d\r\n", lora_config_rssi_get(), lora_config_snr_get());
+    RX_PRINTF(wait, "+EVT:RX3, RSSI %d, SNR %d\r\n", lora_config_rssi_get(), lora_config_snr_get());
   }
 }
 
@@ -1366,32 +1494,49 @@ ATEerror_t at_Send(const char *param)
   }
 }
 
+/* AT+RECV/AT+RECVB output retries while the trace queue is full and drains
+ * before the OK, so a large payload is neither truncated nor loses the OK */
+
 ATEerror_t at_ReceiveBinary(const char *param)
 {
   unsigned i;
 
-  AT_PRINTF("%d:", ReceivedDataPort);
+  RX_PRINTF(true, "%d:", ReceivedDataPort);
   for (i = 0; i < ReceivedDataSize; i++)
   {
-    AT_PRINTF("%02x", ReceivedData[i]);
+    RX_PRINTF(true, "%02x", ReceivedData[i]);
     ReceivedData[i] = 0;
   }
-  AT_PRINTF("\r\n");
+  RX_PRINTF(true, "\r\n");
   ReceivedDataSize = 0;
+  TraceWaitIdle();
 
   return AT_OK;
 }
 
 ATEerror_t at_Receive(const char *param)
 {
-  AT_PRINTF("%d:", ReceivedDataPort);
+  unsigned len = 0;
+  unsigned i;
+
+  RX_PRINTF(true, "%d:", ReceivedDataPort);
   if (ReceivedDataSize)
   {
-    AT_PRINTF("%s", ReceivedData);
+    /* text up to the first NUL, as "%s" printed it, in chunks: a single
+     * element of up to 255 bytes plus header would not fit the queue */
+    while ((len < ReceivedDataSize) && (ReceivedData[len] != '\0'))
+    {
+      len++;
+    }
+    for (i = 0; i < len; i += 64)
+    {
+      RX_PRINTF(true, "%.*s", (int)((len - i < 64) ? (len - i) : 64), &ReceivedData[i]);
+    }
     memset1((uint8_t *)ReceivedData, 0, ReceivedDataSize);
     ReceivedDataSize = 0;
   }
-  AT_PRINTF("\r\n");
+  RX_PRINTF(true, "\r\n");
+  TraceWaitIdle();
 
   return AT_OK;
 }

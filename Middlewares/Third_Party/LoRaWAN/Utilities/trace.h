@@ -50,6 +50,13 @@ void TraceInit( void );
 int32_t TraceSend( const char *strFormat, ...);
 
 /**
+ * @brief TraceWaitIdle blocks until everything queued has been sent
+ * @param None
+ * @retval None
+ */
+void TraceWaitIdle( void );
+
+/**
  * @brief  TraceGetFileName: Return filename string extracted from full path information
  * @param  *fullPath Fullpath string (path + filename)
  * @retval char* Pointer on filename string
