@@ -97,8 +97,16 @@ deep sleep misses those bytes and the downlink is gone.
 MKR WAN 1310 wires to the SAMD21's PA28 (`LORA_IRQ`). The held `+EVT` lines go
 out in front of the output of the host's next AT command, whatever it is, and
 PA4 drops again. MKRWAN_v2 parses `+EVT` inside any command's response, so the
-downlink lands in the library's receive buffer as usual. `AT+RECV`/`AT+RECVB`
-release PA4 without the `+EVT` lines, since they print the data themselves.
+downlink lands in the library's receive buffer as usual. `AT+RECV`, `AT+RECVB`
+and their `=?` forms release PA4 without the `+EVT` lines, since they print the
+data themselves.
+
+The held lines are written completely, waiting for room in the module's
+256-byte output queue, and the queue drains before the command runs, so its
+reply is never lost behind them. At 9600 baud a 115-byte downlink (the most
+TTN sends in RX2) takes about 0.3 s. With `AT+DLHOLD=0` output works as in
+stock firmware, which drops what does not fit: downlinks beyond about 50 bytes
+arrive truncated there.
 
 | Command | Effect |
 | --- | --- |

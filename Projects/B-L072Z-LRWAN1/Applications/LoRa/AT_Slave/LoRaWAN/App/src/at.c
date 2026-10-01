@@ -265,10 +265,19 @@ static void print_u(unsigned int value);
 
 /**
  * @brief  Print the +EVT notification for the last received data
- * @param  None
+ * @param  false: queue each piece once and drop what does not fit, as stock
+ *         firmware does; true: wait for room in the 256-byte trace queue, so
+ *         a large downlink goes out complete
  * @retval None
  */
-static void print_rx_event(void);
+static void print_rx_event(bool wait);
+
+/**
+ * @brief  Tell whether a command line prints the received data itself
+ * @param  The command line
+ * @retval true for AT+RECV, AT+RECV=?, AT+RECVB and AT+RECVB=?
+ */
+static bool is_receive_cmd(const char *cmd);
 
 /**
  * @brief  Drive the host IRQ line (PA4 -> SAMD21 LORA_IRQ)
@@ -309,7 +318,7 @@ void set_at_receive(uint8_t AppPort, uint8_t *Buff, uint8_t BuffSize)
     return;
   }
 
-  print_rx_event();
+  print_rx_event(false);
 }
 
 void at_dlhold_flush(const char *cmd)
@@ -321,10 +330,14 @@ void at_dlhold_flush(const char *cmd)
   DlHoldPending = 0;
   host_irq_write(0);
 
-  /* AT+RECV and AT+RECVB print the data themselves */
-  if (strncmp(cmd, "AT"AT_RECV, sizeof("AT"AT_RECV) - 1) != 0)
+  if (!is_receive_cmd(cmd))
   {
-    print_rx_event();
+    /* Each payload byte is its own queue element (2 bytes + 2 of header), so
+     * a downlink beyond ~50 bytes overruns the trace queue at 9600 baud; wait
+     * for room, then for the queue to drain, so that neither the event nor
+     * the command's own reply right after it is dropped. */
+    print_rx_event(true);
+    TraceWaitIdle();
   }
 }
 
@@ -366,7 +379,28 @@ static void host_irq_write(uint32_t level)
   HW_GPIO_Write(HOST_IRQ_PORT, HOST_IRQ_PIN, level);
 }
 
-static void print_rx_event(void)
+static bool is_receive_cmd(const char *cmd)
+{
+  static const char *const forms[] =
+  {
+    "AT"AT_RECV, "AT"AT_RECV"=?", "AT"AT_RECVB, "AT"AT_RECVB"=?"
+  };
+  unsigned i;
+
+  for (i = 0; i < sizeof(forms) / sizeof(forms[0]); i++)
+  {
+    if (strcmp(cmd, forms[i]) == 0)
+    {
+      return true;
+    }
+  }
+  return false;
+}
+
+/* AT_PRINTF, retried while the trace queue is full if wait is set */
+#define RX_PRINTF(wait, ...) do { } while ((TraceSend(__VA_ARGS__) != 0) && (wait))
+
+static void print_rx_event(bool wait)
 {
   unsigned i;
   MibRequestConfirm_t mib;
@@ -378,29 +412,29 @@ static void print_rx_event(void)
   if (mib.Param.Class == CLASS_A)
   {
     /*aynchronous notification to the host*/
-    AT_PRINTF("+EVT:%d:", ReceivedDataPort);
+    RX_PRINTF(wait, "+EVT:%d:", ReceivedDataPort);
   }
   else /*We are either in Class C or in Class B*/
   {
 #ifdef LORAMAC_CLASSB_ENABLED
     if (Ctx.MulticastSlotState != PINGSLOT_STATE_RX) /*unicast mode*/
     {
-      AT_PRINTF("+EVT: UNICAST\r\n");
+      RX_PRINTF(wait, "+EVT: UNICAST\r\n");
     }
     else /*(multicast mode*/
     {
-      AT_PRINTF("+EVT: MULTICAST\r\n");
+      RX_PRINTF(wait, "+EVT: MULTICAST\r\n");
     }
 #endif /* LORAMAC_CLASSB_ENABLED */
-    AT_PRINTF("+EVT:%d:", ReceivedDataPort);
+    RX_PRINTF(wait, "+EVT:%d:", ReceivedDataPort);
   }
 
   /* Received data to be copied*/
   for (i = 0; i < ReceivedDataSize; i++)
   {
-    AT_PRINTF("%02x", ReceivedData[i]);
+    RX_PRINTF(wait, "%02x", ReceivedData[i]);
   }
-  AT_PRINTF("\r\n");
+  RX_PRINTF(wait, "\r\n");
 
   /* the ReceivedDataSize variable is not reset. Allow to still have access to the received*/
   /* data by the way of either AT+RECVB or AT+RECV ---- ReceivedDataSize = 0;*/
@@ -409,11 +443,11 @@ static void print_rx_event(void)
   /*to indicate in which received window we are : either RXC for Class_C or RX3 for Class_B*/
   if (mib.Param.Class == CLASS_C)
   {
-    AT_PRINTF("+EVT:RXC, RSSI %d, SNR %d\r\n", lora_config_rssi_get(), lora_config_snr_get());
+    RX_PRINTF(wait, "+EVT:RXC, RSSI %d, SNR %d\r\n", lora_config_rssi_get(), lora_config_snr_get());
   }
   else
   {
-    AT_PRINTF("+EVT:RX3, RSSI %d, SNR %d\r\n", lora_config_rssi_get(), lora_config_snr_get());
+    RX_PRINTF(wait, "+EVT:RX3, RSSI %d, SNR %d\r\n", lora_config_rssi_get(), lora_config_snr_get());
   }
 }
 
