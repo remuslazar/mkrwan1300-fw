@@ -29,6 +29,7 @@
 #include "vcom.h"
 #include "tiny_sscanf.h"
 #include "version.h"
+#include "hw.h"
 #include "hw_msp.h"
 #include "test_rf.h"
 
@@ -262,13 +263,34 @@ static void print_d(int value);
  */
 static void print_u(unsigned int value);
 
+/**
+ * @brief  Print the +EVT notification for the last received data
+ * @param  None
+ * @retval None
+ */
+static void print_rx_event(void);
+
+/**
+ * @brief  Drive the host IRQ line (PA4 -> SAMD21 LORA_IRQ)
+ * @param  1 while a held downlink waits for the host, 0 otherwise
+ * @retval None
+ */
+static void host_irq_write(uint32_t level);
+
+/**
+ * @brief Downlink hold mode (AT+DLHOLD): 1 = keep +EVT until the next command
+ */
+static uint8_t DlHoldEnabled = 0;
+
+/**
+ * @brief A held downlink waits to be printed
+ */
+static uint8_t DlHoldPending = 0;
+
 /* Exported functions ------------------------------------------------------- */
 
 void set_at_receive(uint8_t AppPort, uint8_t *Buff, uint8_t BuffSize)
 {
-  unsigned i;
-  MibRequestConfirm_t mib;
-
   if (MAX_RECEIVED_DATA <= BuffSize)
   {
     BuffSize = MAX_RECEIVED_DATA;
@@ -276,6 +298,78 @@ void set_at_receive(uint8_t AppPort, uint8_t *Buff, uint8_t BuffSize)
   memcpy1((uint8_t *)ReceivedData, Buff, BuffSize);
   ReceivedDataSize = BuffSize;
   ReceivedDataPort = AppPort;
+
+  if (DlHoldEnabled)
+  {
+    /* The host may be asleep and would lose an asynchronous +EVT: keep it
+     * and raise the IRQ line instead; at_dlhold_flush() prints it in front
+     * of the host's next command. A newer downlink replaces an older one. */
+    DlHoldPending = 1;
+    host_irq_write(1);
+    return;
+  }
+
+  print_rx_event();
+}
+
+void at_dlhold_flush(const char *cmd)
+{
+  if (!DlHoldPending)
+  {
+    return;
+  }
+  DlHoldPending = 0;
+  host_irq_write(0);
+
+  /* AT+RECV and AT+RECVB print the data themselves */
+  if (strncmp(cmd, "AT"AT_RECV, sizeof("AT"AT_RECV) - 1) != 0)
+  {
+    print_rx_event();
+  }
+}
+
+ATEerror_t at_DlHold_get(const char *param)
+{
+  print_d(DlHoldEnabled);
+  return AT_OK;
+}
+
+ATEerror_t at_DlHold_set(const char *param)
+{
+  GPIO_InitTypeDef initStruct = {0};
+
+  switch (param[0])
+  {
+    case '0':
+    case '1':
+      DlHoldEnabled = param[0] - '0';
+      break;
+    default:
+      return AT_PARAM_ERROR;
+  }
+
+  /* Output only while the mode is on; otherwise analog, as in stock firmware */
+  DlHoldPending = 0;
+  host_irq_write(0);
+  initStruct.Mode = DlHoldEnabled ? GPIO_MODE_OUTPUT_PP : GPIO_MODE_ANALOG;
+  initStruct.Pull = GPIO_NOPULL;
+  initStruct.Speed = GPIO_SPEED_LOW;
+  HW_GPIO_Init(HOST_IRQ_PORT, HOST_IRQ_PIN, &initStruct);
+
+  return AT_OK;
+}
+
+static void host_irq_write(uint32_t level)
+{
+  /* HW_GpioInit() leaves the port clocks off; BSRR writes need it on */
+  RCC_GPIO_CLK_ENABLE((uint32_t) HOST_IRQ_PORT);
+  HW_GPIO_Write(HOST_IRQ_PORT, HOST_IRQ_PIN, level);
+}
+
+static void print_rx_event(void)
+{
+  unsigned i;
+  MibRequestConfirm_t mib;
 
   mib.Type = MIB_DEVICE_CLASS;
   LoRaMacMibGetRequestConfirm(&mib);

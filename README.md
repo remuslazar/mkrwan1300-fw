@@ -56,6 +56,63 @@ Then upload the real sketch to the SAMD21 again; the module keeps its firmware.
 The module's SWD pins are also on test pads (`ST_SWDIO`, `ST_SWCLK`, `ST_RST`,
 `ST_BOOT0` in the 1310 schematic) for an ST-LINK, if a debugger is needed.
 
+## Downlink hold (`AT+DLHOLD`)
+
+Stock firmware prints a downlink the moment it arrives, as an asynchronous
+`+EVT:<port>:<hex>` line plus a `+EVT:RX…, RSSI …, SNR …` line. A SAMD21 in
+deep sleep misses those bytes and the downlink is gone.
+
+`AT+DLHOLD=1` holds the downlink instead and raises the module's PA4, which the
+MKR WAN 1310 wires to the SAMD21's PA28 (`LORA_IRQ`). The held `+EVT` lines go
+out in front of the output of the host's next AT command, whatever it is, and
+PA4 drops again. MKRWAN_v2 parses `+EVT` inside any command's response, so the
+downlink lands in the library's receive buffer as usual. `AT+RECV`/`AT+RECVB`
+release PA4 without the `+EVT` lines, since they print the data themselves.
+
+| Command | Effect |
+| --- | --- |
+| `AT+DLHOLD=0` | default: print `+EVT` at once, PA4 unused (analog), as stock |
+| `AT+DLHOLD=1` | hold `+EVT` until the next command, PA4 high while one waits |
+| `AT+DLHOLD=?` | current mode |
+
+There is one slot: a second downlink before the host's next command replaces
+the first (only possible in class B/C). The mode is not stored, and the
+library's `modem.begin()` resets the module, so set it after every `begin()`.
+In hold mode an awake host that only polls `modem.available()` sees nothing
+until it sends a command.
+
+MKRWAN_v2 has no call for a custom command, so a sketch writes it itself and
+drains the reply before the library talks to the module again:
+
+```cpp
+#include <MKRWAN_v2.h>
+#include <ArduinoLowPower.h>
+
+LoRaModem modem;
+volatile bool downlinkWaiting = false;
+
+void onLoraIrq() { downlinkWaiting = true; }
+
+void setup() {
+  modem.begin(EU868);
+  SerialLoRa.print("AT+DLHOLD=1\n");
+  delay(100);
+  while (SerialLoRa.available()) SerialLoRa.read();   // the "OK"
+  LowPower.attachInterruptWakeup(LORA_IRQ, onLoraIrq, RISING);
+  // join, …
+}
+
+void loop() {
+  // send, then sleep; the RTC alarm or LORA_IRQ wakes the SAMD21
+  LowPower.deepSleep(15 * 60 * 1000);
+  if (downlinkWaiting) {
+    downlinkWaiting = false;
+    modem.getDataRate();          // any command delivers the held +EVT
+    while (modem.available()) { /* modem.read() … */ }
+  }
+}
+```
+
 ## Versions
 
 `AT+VER?` reports `APP_VERSION` from
@@ -63,6 +120,10 @@ The module's SWD pins are also on test pads (`ST_SWDIO`, `ST_SWCLK`, `ST_RST`,
 Upstream 1.3.1 is `01.03.00.00`; this fork counts its releases in the last byte
 (`01.03.00.01`, …), tags them `v1.3.1-remus.N` and attaches the `.bin` to the
 GitHub release.
+
+| Version | Change |
+| --- | --- |
+| `01.03.00.01` | downlink hold mode, `AT+DLHOLD` |
 
 ## Upstream pull requests not merged
 
