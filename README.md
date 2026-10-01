@@ -6,12 +6,41 @@ It is Arduino's [mkrwan1300-fw](https://github.com/arduino/mkrwan1300-fw),
 derived from ST's I-CUBE-LRWAN AT_Slave example for the B-L072Z-LRWAN1 kit,
 which carries the same module.
 
-This fork exists to fix what upstream left open after its last change in 2021,
-starting with downlinks lost while the SAMD21 sleeps
-([MKRWAN#36](https://github.com/arduino-libraries/MKRWAN/issues/36),
-[MKRWAN_v2#24](https://github.com/arduino-libraries/MKRWAN_v2/issues/24)).
-It stays AT-compatible with the [MKRWAN_v2](https://github.com/arduino-libraries/MKRWAN_v2)
-library, so sketches keep working.
+## What this fork adds
+
+| Change | Why |
+| --- | --- |
+| [Downlink hold, `AT+DLHOLD`](#downlink-hold-atdlhold) | a SAMD21 in deep sleep loses every downlink with stock firmware; the module now keeps it and signals the SAMD21 on `LORA_IRQ` |
+| [`build.sh`](#build) with a pinned toolchain | reproducible builds on a current Mac; upstream documents only System Workbench for STM32 |
+| this README | build, flash and version notes upstream never had for the 1.3.1 line |
+
+Everything stays AT-compatible with Arduino's
+[MKRWAN_v2](https://github.com/arduino-libraries/MKRWAN_v2) library: new
+behaviour is opt-in, and with it off the firmware behaves as upstream 1.3.1.
+
+## Why this is not upstream
+
+Upstream is dormant. The 1.3.1 line, the one MKRWAN_v2 uses, last changed on
+2020-10-14; the last release of any line is 1.2.3 from 2021-05-18. Since then
+MKRWAN_v2 has had only automated dependency updates, and nothing has been
+merged for the firmware:
+
+- The downlink loss has been reported since 2018 —
+  [MKRWAN#36](https://github.com/arduino-libraries/MKRWAN/issues/36) (open,
+  with workarounds and a proposed fix from 2020, never answered by a
+  maintainer) and
+  [MKRWAN_v2#24](https://github.com/arduino-libraries/MKRWAN_v2/issues/24)
+  (open since 2022, no reply).
+- The SAMD21-side approach, waking on UART traffic, was proposed in
+  [ArduinoLowPower#20](https://github.com/arduino-libraries/ArduinoLowPower/pull/20)
+  and [ArduinoCore-samd#427](https://github.com/arduino/ArduinoCore-samd/pull/427);
+  both were closed without a merge.
+- Community fixes to this firmware wait as open pull requests: #25, #27, #35.
+
+The fix also depends on how the MKR WAN boards wire the module (its PA4 to
+the SAMD21's PA28), while the code is ST's generic project for their own kit,
+so it is not a drop-in for every user of the code base. It can still be
+offered upstream as a pull request; nothing here depends on that being merged.
 
 ## Branches
 
