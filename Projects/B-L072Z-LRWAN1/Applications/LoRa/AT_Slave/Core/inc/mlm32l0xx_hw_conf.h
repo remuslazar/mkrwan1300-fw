@@ -78,6 +78,13 @@ extern "C" {
 #define RADIO_DIO_5_PORT                          GPIOA
 #define RADIO_DIO_5_PIN                           GPIO_PIN_4
 
+/* On the MKR WAN 1300/1310, PA4 is not wired to DIO5 but to the SAMD21's PA28
+ * (LORA_IRQ). RADIO_DIO_5 is never defined, so the radio code leaves PA4 alone
+ * and the downlink hold mode (AT+DLHOLD) drives it as a "downlink waiting"
+ * line to the host. */
+#define HOST_IRQ_PORT                             GPIOA
+#define HOST_IRQ_PIN                              GPIO_PIN_4
+
 #define RADIO_TCXO_VCC_PORT                       GPIOB
 #define RADIO_TCXO_VCC_PIN                        GPIO_PIN_6
 

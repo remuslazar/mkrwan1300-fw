@@ -104,6 +104,7 @@ typedef enum eATEerror
 #define AT_LTIME      "+LTIME"
 #define AT_CHANMASK   "+CHANMASK"
 #define AT_CHANDEFMASK "+CHANDEFMASK"
+#define AT_DLHOLD     "+DLHOLD"
 
 /* Exported functions ------------------------------------------------------- */
 
@@ -115,6 +116,28 @@ typedef enum eATEerror
  * @retval None
  */
 void set_at_receive(uint8_t AppPort, uint8_t *Buff, uint8_t BuffSize);
+
+/**
+ * @brief  Print a downlink held by AT+DLHOLD=1, if any, and release the
+ *         host IRQ line. Called before each command is executed.
+ * @param  The command line about to be executed
+ * @retval None
+ */
+void at_dlhold_flush(const char *cmd);
+
+/**
+ * @brief  Print whether downlinks are held until the next command
+ * @param  Param string of the AT command - unused
+ * @retval AT_OK
+ */
+ATEerror_t at_DlHold_get(const char *param);
+
+/**
+ * @brief  Hold downlinks until the next command (1) or print them at once (0)
+ * @param  Param string of the AT command
+ * @retval AT_OK if OK, or an appropriate AT_xxx error code
+ */
+ATEerror_t at_DlHold_set(const char *param);
 
 /**
  * @brief  Return AT_OK in all cases

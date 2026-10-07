@@ -424,6 +424,17 @@ static const struct ATCommand_s ATCommand[] =
   },
 
   {
+    .string = AT_DLHOLD,
+    .size_string = sizeof(AT_DLHOLD) - 1,
+#ifndef NO_HELP
+    .help_string = "AT"AT_DLHOLD ": Get or Set the downlink hold mode (0: print +EVT at once, 1: hold it and raise PA4 until the next command)\r\n",
+#endif
+    .get = at_DlHold_get,
+    .set = at_DlHold_set,
+    .run = at_return_error,
+  },
+
+  {
     .string = AT_VER,
     .size_string = sizeof(AT_VER) - 1,
 #ifndef NO_HELP
@@ -779,6 +790,9 @@ static void parse_cmd(const char *cmd)
   ATEerror_t status = AT_OK;
   const struct ATCommand_s *Current_ATCommand;
   int i;
+
+  /* a downlink held by AT+DLHOLD=1 goes out ahead of the command's own output */
+  at_dlhold_flush(cmd);
 
   if ((cmd[0] != 'A') || (cmd[1] != 'T'))
   {
